@@ -19,14 +19,15 @@ export function Navbar() {
           {isLoading ? (
             <div className="h-8 w-24 bg-muted animate-pulse rounded-md" />
           ) : user ? (
-            <>
-  <Link href="/profile" className="text-sm font-medium hover:underline">
-    Profile
-  </Link>
-  <span className="text-sm text-muted-foreground">Welcome, {user.username}</span>
-  <Button variant="outline" size="sm" onClick={logout}>
-    Logout
-  </Button>
+             <>
+              {/* THIS IS THE MISSING LINK */}
+              <Link href="/profile" className="text-sm font-medium hover:underline">
+                Profile
+              </Link>
+              <span className="text-sm text-muted-foreground">Welcome, {user.username}</span>
+              <Button variant="outline" size="sm" onClick={logout}>
+                Logout
+              </Button>
             </>
           ) : (
             <>
