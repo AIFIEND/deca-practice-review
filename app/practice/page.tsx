@@ -1,173 +1,188 @@
-"use client"
+// app/practice/page.tsx
 
-import { useState } from "react"
-import { useRouter } from "next/navigation"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { useToast } from "@/hooks/use-toast"
-import { ChevronLeft, ChevronRight } from "lucide-react"
-import { AnswerChoice } from "@/components/answer-choice"
-import { FlagButton } from "@/components/flag-button"
-import { ProgressBar } from "@/components/progress-bar"
-import { useQuestionStore } from "@/hooks/use-question-store"
-import { questions } from "@/lib/questions"
+'use client'; // This page is interactive
 
-interface QuestionState {
-  selectedChoiceId: string | null
-  isAnswered: boolean
-  isCorrect: boolean | null
-  explanation: string | null
-}
+import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Question } from '@/types';
+
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+import { Flag, X } from 'lucide-react';
+import { toast } from 'sonner';
 
 export default function PracticePage() {
-  const router = useRouter()
-  const { toast } = useToast()
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
-  const [questionStates, setQuestionStates] = useState<Record<string, QuestionState>>({})
+  const searchParams = useSearchParams();
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const { answers, eliminatedOptions, flaggedIds, attempts, toggleEliminate, toggleFlag, recordAnswer } =
-    useQuestionStore()
-
-  const currentQuestion = questions[currentQuestionIndex]
-  const currentQuestionId = currentQuestion.id.toString()
-  const answeredCount = Object.keys(answers).length
-
-  const currentState = questionStates[currentQuestionId] || {
-    selectedChoiceId: null,
-    isAnswered: false,
-    isCorrect: null,
-    explanation: null,
-  }
-
-  const handleAnswerSelect = (choiceId: string) => {
-    if (currentState.isAnswered) return
-
-    const isCorrect = choiceId === currentQuestion.correctAnswer
-    const newState: QuestionState = {
-      selectedChoiceId: choiceId,
-      isAnswered: true,
-      isCorrect,
-      explanation: currentQuestion.explanation,
+  // Fetch questions from the API based on URL parameters
+  useEffect(() => {
+    async function fetchQuestions() {
+      try {
+        // Pass the search params directly to the API
+        const res = await fetch(`http://127.0.0.1:5000/api/questions?${searchParams.toString()}`);
+        const data = await res.json();
+        setQuestions(data);
+      } catch (error) {
+        console.error("Failed to fetch questions:", error);
+      } finally {
+        setIsLoading(false);
+      }
     }
+    fetchQuestions();
+  }, [searchParams]);
 
-    setQuestionStates((prev) => ({
-      ...prev,
-      [currentQuestionId]: newState,
-    }))
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [selectedAnswers, setSelectedAnswers] = useState<{ [key: number]: string }>({});
+  const [eliminatedOptions, setEliminatedOptions] = useState<{ [key: number]: string[] }>({});
+  const [flaggedQuestions, setFlaggedQuestions] = useState<number[]>([]);
+  const [showScore, setShowScore] = useState(false);
+  const [score, setScore] = useState<number | null>(null);
+  const [showFeedback, setShowFeedback] = useState(false);
 
-    recordAnswer(currentQuestionId, choiceId)
-
-    toast({
-      title: isCorrect ? "Correct!" : "Incorrect",
-      description: currentQuestion.explanation,
-      variant: isCorrect ? "default" : "destructive",
-    })
+  if (isLoading) {
+    return <div className="text-center p-10">Loading Questions...</div>;
   }
+
+  if (!isLoading && questions.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <Alert>
+          <AlertTitle>No Questions Found</AlertTitle>
+          <AlertDescription>
+            No questions match the selected filters. Please go back and try different selections.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  const currentQuestion = questions[currentQuestionIndex];
+  const isCorrect = currentQuestion && selectedAnswers[currentQuestion.id] === currentQuestion.correctAnswer;
+
+  const handleAnswerSelect = (questionId: number, answerId: string) => {
+    if (showFeedback) return;
+
+    setSelectedAnswers(prev => ({ ...prev, [questionId]: answerId }));
+    const correct = questions.find(q => q.id === questionId)?.correctAnswer === answerId;
+
+    toast(correct ? 'Correct!' : 'Incorrect.', {
+      description: correct ? 'Great job!' : 'Keep trying!',
+      duration: 2000,
+    });
+    setShowFeedback(true);
+  };
+
+  const handleEliminateOption = (questionId: number, optionId: string) => {
+    setEliminatedOptions(prev => ({ ...prev, [questionId]: [...(prev[questionId] || []), optionId] }));
+  };
+
+  const handleFlagQuestion = (questionId: number) => {
+    setFlaggedQuestions(prev => prev.includes(questionId) ? prev.filter(id => id !== questionId) : [...prev, questionId]);
+  };
 
   const handleNextQuestion = () => {
+    setShowFeedback(false);
     if (currentQuestionIndex < questions.length - 1) {
-      setCurrentQuestionIndex(currentQuestionIndex + 1)
+      setCurrentQuestionIndex(prev => prev + 1);
+    } else {
+      handleShowScore();
     }
+  };
+
+// In app/practice/page.tsx, inside the PracticePage component
+
+const handleShowScore = async () => {
+  const correctCount = questions.reduce((acc, q) => (selectedAnswers[q.id] === q.correctAnswer ? acc + 1 : acc), 0);
+  const finalScore = questions.length > 0 ? (correctCount / questions.length) * 100 : 0;
+  setScore(finalScore);
+  setShowScore(true);
+
+  // --- NEW: Send results to the backend ---
+  try {
+    await fetch('http://127.0.0.1:5000/api/quiz/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        score: Math.round(finalScore),
+        totalQuestions: questions.length,
+      }),
+      credentials: 'include', // Important for sending the session cookie
+    });
+  } catch (error) {
+    console.error("Failed to save quiz score:", error);
   }
+  // ------------------------------------
+};
 
-  const handlePreviousQuestion = () => {
-    if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(currentQuestionIndex - 1)
-    }
+  if (showScore) {
+    return (
+      <div className="max-w-4xl mx-auto p-4 mt-10">
+        <Card>
+          <CardHeader><CardTitle>Quiz Complete!</CardTitle><CardDescription>Here's how you did:</CardDescription></CardHeader>
+          <CardContent>
+            <Alert variant="default" className="text-center">
+              <AlertTitle className="text-2xl mb-2">Final Score</AlertTitle>
+              <AlertDescription className="text-4xl font-bold">{score?.toFixed(0) ?? 0}%</AlertDescription>
+            </Alert>
+            <Button onClick={() => (window.location.href = '/start-quiz')} className="w-full mt-6">Take Another Quiz</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
-
-  const handleSubmit = () => {
-    const correctAnswers = Object.entries(answers).filter(([questionId, answer]) => {
-      const question = questions.find((q) => q.id.toString() === questionId)
-      return question && answer === question.correctAnswer
-    }).length
-
-    const score = Math.round((correctAnswers / Object.keys(answers).length) * 100)
-
-    const params = new URLSearchParams({
-      score: score.toString(),
-      correct: correctAnswers.toString(),
-      total: Object.keys(answers).length.toString(),
-      flagged: flaggedIds.join(","),
-    })
-
-    router.push(`/results?${params.toString()}`)
-  }
-
-  const currentEliminated = eliminatedOptions[currentQuestionId] || []
-  const isFlagged = flaggedIds.includes(currentQuestionId)
 
   return (
-    <div className="min-h-screen bg-background">
-      <ProgressBar current={answeredCount} total={questions.length} />
-
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-3xl mx-auto">
-          <div className="flex items-center justify-between mb-6">
-            <div className="text-sm text-muted-foreground">
-              Question {currentQuestionIndex + 1} of {questions.length}
-            </div>
-            <FlagButton isFlagged={isFlagged} onToggle={() => toggleFlag(currentQuestionId)} />
-          </div>
-
-          <Card className="mb-8">
-            <CardHeader>
-              <CardTitle className="text-xl">{currentQuestion.stem}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {Object.entries(currentQuestion.options).map(([key, value]) => {
-                  const isThisChoice = currentState.selectedChoiceId === key
-                  const isCorrectChoice = key === currentQuestion.correctAnswer
-                  const showCorrectness = currentState.isAnswered && (isThisChoice || isCorrectChoice)
-
-                  return (
-                    <AnswerChoice
-                      key={key}
-                      text={`${key}. ${value}`}
-                      isEliminated={currentEliminated.includes(key)}
-                      isAnswered={currentState.isAnswered}
-                      isCorrect={showCorrectness ? isCorrectChoice : undefined}
-                      explanation={showCorrectness ? currentQuestion.explanation : undefined}
-                      onToggleEliminate={() => toggleEliminate(currentQuestionId, key)}
-                      onSelect={() => handleAnswerSelect(key)}
-                    />
-                  )
-                })}
-              </div>
-            </CardContent>
-          </Card>
-
-          <div className="flex items-center justify-between">
-            <Button
-              variant="outline"
-              onClick={handlePreviousQuestion}
-              disabled={currentQuestionIndex === 0}
-              aria-label="Previous question"
-            >
-              <ChevronLeft className="h-4 w-4 mr-1" />
-              Previous
+    <div className="max-w-4xl mx-auto p-4 mt-10">
+      <Card>
+        <CardHeader>
+          <div className="flex justify-between items-center">
+            <CardTitle>Question {currentQuestionIndex + 1} of {questions.length}</CardTitle>
+            <Button variant="ghost" size="icon" onClick={() => handleFlagQuestion(currentQuestion.id)}>
+              <Flag className={flaggedQuestions.includes(currentQuestion.id) ? 'text-blue-500 fill-current' : ''} />
             </Button>
-
-            <div className="flex gap-2">
-              {answeredCount === questions.length ? (
-                <Button onClick={handleSubmit} aria-label="Submit quiz">
-                  Submit Quiz
-                </Button>
-              ) : (
-                <Button
-                  onClick={handleNextQuestion}
-                  disabled={currentQuestionIndex === questions.length - 1 || !currentState.isAnswered}
-                  aria-label="Next question"
-                >
-                  Next
-                  <ChevronRight className="h-4 w-4 ml-1" />
-                </Button>
-              )}
-            </div>
           </div>
-        </div>
-      </div>
+          <CardDescription className="pt-4 text-base">{currentQuestion.question}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {currentQuestion.options.map(option => (
+              <div key={option.id} className="flex items-center gap-2">
+                <Button
+                  variant={selectedAnswers[currentQuestion.id] === option.id ? 'default' : 'outline'}
+                  className={`w-full justify-start h-auto text-wrap text-left ${(eliminatedOptions[currentQuestion.id] || []).includes(option.id) ? 'line-through text-muted-foreground' : ''}`}
+                  onClick={() => handleAnswerSelect(currentQuestion.id, option.id)}
+                  disabled={(eliminatedOptions[currentQuestion.id] || []).includes(option.id) || showFeedback}
+                >
+                  <span className="font-bold mr-2">{option.id}.</span> {option.text}
+                </Button>
+                {!showFeedback && (
+                  <Button variant="ghost" size="icon" onClick={() => handleEliminateOption(currentQuestion.id, option.id)} aria-label={`Eliminate option ${option.id}`}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {showFeedback && (
+            <Alert variant={isCorrect ? 'default' : 'destructive'} className="mt-6">
+              <AlertTitle>{isCorrect ? 'Correct!' : 'Incorrect'}</AlertTitle>
+              <AlertDescription>{currentQuestion.explanation}</AlertDescription>
+            </Alert>
+          )}
+
+          <div className="mt-6">
+            {showFeedback && (
+              <Button onClick={handleNextQuestion} className="w-full">
+                {currentQuestionIndex === questions.length - 1 ? 'Show Score' : 'Next Question'}
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
-  )
+  );
 }
